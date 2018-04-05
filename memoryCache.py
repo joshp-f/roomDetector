@@ -10,7 +10,7 @@ class memoryCache:
             text = file.read()
             if text:
                 init = json.loads(text)
-            if not init: init = {}
+            else: init = {}
             file.close()
         except IOError:
             pass
@@ -19,6 +19,8 @@ class memoryCache:
             for k2 in init[k]:
                 self.d[k][k2] = init[k][k2]
     def runPredictor(self,o,label=None):
+        o = str(o)
+        a = str(label)
         d = self.d
         top = None
         if d and d[o]:
@@ -26,8 +28,12 @@ class memoryCache:
         # only if reinforcing
         if label and top != o:
             pass
-        if label: d[o][label] += 1
-        return top
+        if label:
+            for k in d[o]:
+                d[o][k] =  d[o][k]*0.99
+            d[o][label] += 1
+        return d[o]
+
 
     def saveCache(self):
         d = self.d

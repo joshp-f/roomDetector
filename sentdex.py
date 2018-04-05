@@ -1,8 +1,10 @@
 import numpy as np
-import os
 import six.moves.urllib as urllib
-import sys
-roomname = sys.argv[1]
+import sys, os, math
+if len(sys.argv) > 1:
+    roomname = sys.argv[1]
+else:
+    roomname = None
 from memoryCache import memoryCache
 import tarfile
 import tensorflow as tf
@@ -16,6 +18,10 @@ from PIL import Image
 import cv2
 cap = cv2.VideoCapture(0)
 
+from color_extractor import ImageToColor
+
+npz = np.load('color_names.npz')
+img_to_color = ImageToColor(npz['samples'], npz['labels'])
 # This is needed since the notebook is stored in the object_detection folder.
 sys.path.append("..")
 
@@ -41,7 +47,7 @@ from utils import visualization_utils as vis_util
 # In[4]:
 
 # What model to download.
-MODEL_NAME = 'ssd_mobilenet_v1_coco_11_06_2017'
+MODEL_NAME =  'ssd_mobilenet_v1_coco_2017_11_17'#'ssd_mobilenet_v1_coco_11_06_2017'
 MODEL_FILE = MODEL_NAME + '.tar.gz'
 DOWNLOAD_BASE = 'http://download.tensorflow.org/models/object_detection/'
 
@@ -52,6 +58,7 @@ PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
 PATH_TO_LABELS = os.path.join('data', 'mscoco_label_map.pbtxt')
 
 NUM_CLASSES = 90
+tolerance = 0.15
 
 
 # ## Download Model
@@ -114,21 +121,34 @@ TEST_IMAGE_PATHS = [ os.path.join(PATH_TO_TEST_IMAGES_DIR, 'image{}.jpg'.format(
 # Size, in inches, of the output images.
 IMAGE_SIZE = (12, 8)
 
+# return centre position of box with coords: x1,y1,x2,y2
+def getBoxCentre(box):
+    return (box[0]+box[2])/2, (box[1]+box[3])/2
 
-# In[10]:
+opers = detection_graph.get_operations()
+# for i in opers: print(i)
+# In[10]
+#prevdata stores previous frame details
+# oldBoxes = None
+# oldFeatures = None
+# nettotal = 0.0
+direction = None
 cache = memoryCache()
 print('running predictor')
 with detection_graph.as_default():
   with tf.Session(graph=detection_graph) as sess:
     while True:
       ret, image_np = cap.read()
+      image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+
+      # print(detection_graph.get_operations())
       # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
       image_np_expanded = np.expand_dims(image_np, axis=0)
       image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
       # Each box represents a part of the image where a particular object was detected.
       boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
       # Each score represent how level of confidence for each of the objects.
-      # Score is shown on the result image, together with the class label.
+      # Score is shown on the result image, togeth  er with the class label.
       scores = detection_graph.get_tensor_by_name('detection_scores:0')
       classes = detection_graph.get_tensor_by_name('detection_classes:0')
       num_detections = detection_graph.get_tensor_by_name('num_detections:0')
@@ -136,14 +156,55 @@ with detection_graph.as_default():
       (boxes, scores, classes, num_detections) = sess.run(
           [boxes, scores, classes, num_detections],
           feed_dict={image_tensor: image_np_expanded})
+    
+      tolerance = np.partition(scores.flatten(), -4)[-4]
+      # print(boxes)
       # Visualization of the results of a detection.
       # insert into memory correlation of vision to room
-      print(classes, scores, num_detections)
-      index = np.argmax(scores[0])
-      cid = classes[0][index]
-      print(cid)
-      cache.runPredictor(cid, label=roomname)
-      print(cache.d)
+      indexes = (scores > tolerance) # boolean matrix of if features are confidently enough observed
+      features = classes[indexes] # high confidence featurees
+      goodBoxes = boxes[indexes]
+      nscores = scores[0]
+      nboxes = boxes[0]
+      #get movement feature
+    #   nettotal = 0.0
+    #   if (not (oldBoxes is None)):
+    #     for i in range(len(features)):
+    #         for j in range(len(oldFeatures)):
+    #             if oldFeatures[j] == features[i]:
+    #                 oldCentre = getBoxCentre(oldBoxes[j])
+    #                 newCentre = getBoxCentre(goodBoxes[i])
+    #                 nettotal = 0.9*nettotal + 0.1*(newCentre[0]-oldCentre[0])
+    #   print(nettotal)
+    #   (oldBoxes, oldFeatures) = (goodBoxes, features)
+      #get color features
+      colors = np.empty([nboxes.shape[0]],dtype=object)
+      for i in range(len(nscores)):
+          if nscores[i] >= tolerance:
+              if i < 0:
+                topbox = nboxes[i]
+                sh = image_np.shape
+                x1 = int(topbox[0]*sh[0])
+                y1 = int(topbox[1]*sh[1])
+                x2 = int(topbox[2]*sh[0])
+                y2 = int(topbox[3]*sh[1])
+                img2 = image_np[x1:x2,y1:y2]
+                colors[i] = img_to_color.get(img2)[0]
+              else:
+                colors[i] = '' 
+      guesses = defaultdict(int)
+      #get room feature
+      for f in features:
+          # img = image_np[boxes]
+          pred = cache.runPredictor(f, label=direction)
+          total = sum(pred.values())
+          normalized = dict([(k, v*math.pow(v/total,5)) for (k,v) in pred.items()]) # gives very weak impact to mixed prob sights
+          for k in normalized: guesses[k] += normalized[k]
+          # guesses[pred] += 1
+        #   print(guesses)
+          if guesses:
+            print(max(guesses.items(), key = lambda t : [0]))
+      cache.saveCache()
       ##############
       vis_util.visualize_boxes_and_labels_on_image_array(
           image_np,
@@ -152,9 +213,27 @@ with detection_graph.as_default():
           np.squeeze(scores),
           category_index,
           use_normalized_coordinates=True,
-          line_thickness=8)
+          min_score_thresh=tolerance,
+          line_thickness=8,
+          colors = colors
+          )
 
+      image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
       cv2.imshow('object detection', cv2.resize(image_np, (800,600)))
-      if cv2.waitKey(25) & 0xFF == ord('q'):
+      res = cv2.waitKey(25) & 0xFF
+      if res == ord('q'):
         cv2.destroyAllWindows()
         break
+      else:
+        olddir = direction
+        if res == ord('w'):
+            direction = 'forward'
+        elif res == ord('d'):
+            direction = 'right'
+        elif res == ord('a'):
+            direction = 'left'
+        elif res == ord('s'):
+            direction = None
+        if olddir != direction:
+            print('now ', direction,' from ',olddir)
+
