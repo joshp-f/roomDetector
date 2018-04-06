@@ -1,10 +1,6 @@
 import numpy as np
 import six.moves.urllib as urllib
 import sys, os, math
-if len(sys.argv) > 1:
-    roomname = sys.argv[1]
-else:
-    roomname = None
 from memoryCache import memoryCache
 import tarfile
 import tensorflow as tf
@@ -13,9 +9,16 @@ import zipfile
 from collections import defaultdict
 from io import StringIO
 from matplotlib import pyplot as plt
-from PIL import Image
+from PIL import Image, ImageGrab
 
 import cv2
+import keyboard
+global lastKey
+lastKey = None
+def on_press(key):
+    global lastKey
+    lastKey = key.name
+keyboard.hook(on_press)
 cap = cv2.VideoCapture(0)
 
 from color_extractor import ImageToColor
@@ -132,14 +135,17 @@ opers = detection_graph.get_operations()
 # oldBoxes = None
 # oldFeatures = None
 # nettotal = 0.0
-direction = None
 cache = memoryCache()
+commands = []
+training = False
+running = False
 print('running predictor')
 with detection_graph.as_default():
   with tf.Session(graph=detection_graph) as sess:
     while True:
-      ret, image_np = cap.read()
-      image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+    #   ret, image_np = cap.read()
+    #   image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+      image_np = np.array(ImageGrab.grab())
 
       # print(detection_graph.get_operations())
       # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
@@ -157,26 +163,18 @@ with detection_graph.as_default():
           [boxes, scores, classes, num_detections],
           feed_dict={image_tensor: image_np_expanded})
     
-      tolerance = np.partition(scores.flatten(), -4)[-4]
+      tolerance = np.partition(scores.flatten(), -8)[-8]
       # print(boxes)
       # Visualization of the results of a detection.
       # insert into memory correlation of vision to room
+
       indexes = (scores > tolerance) # boolean matrix of if features are confidently enough observed
       features = classes[indexes] # high confidence featurees
       goodBoxes = boxes[indexes]
+      centres = (goodBoxes[:,(0,1)]+goodBoxes[:,(2,3)])/2
       nscores = scores[0]
       nboxes = boxes[0]
-      #get movement feature
-    #   nettotal = 0.0
-    #   if (not (oldBoxes is None)):
-    #     for i in range(len(features)):
-    #         for j in range(len(oldFeatures)):
-    #             if oldFeatures[j] == features[i]:
-    #                 oldCentre = getBoxCentre(oldBoxes[j])
-    #                 newCentre = getBoxCentre(goodBoxes[i])
-    #                 nettotal = 0.9*nettotal + 0.1*(newCentre[0]-oldCentre[0])
-    #   print(nettotal)
-    #   (oldBoxes, oldFeatures) = (goodBoxes, features)
+    
       #get color features
       colors = np.empty([nboxes.shape[0]],dtype=object)
       for i in range(len(nscores)):
@@ -192,18 +190,20 @@ with detection_graph.as_default():
                 colors[i] = img_to_color.get(img2)[0]
               else:
                 colors[i] = '' 
-      guesses = defaultdict(int)
-      #get room feature
-      for f in features:
-          # img = image_np[boxes]
-          pred = cache.runPredictor(f, label=direction)
-          total = sum(pred.values())
-          normalized = dict([(k, v*math.pow(v/total,5)) for (k,v) in pred.items()]) # gives very weak impact to mixed prob sights
-          for k in normalized: guesses[k] += normalized[k]
-          # guesses[pred] += 1
-        #   print(guesses)
-          if guesses:
-            print(max(guesses.items(), key = lambda t : [0]))
+      #get shape feature
+      concepts = list(map(str, list(features)))
+      quadrants = (goodBoxes*3).astype(int)
+      newHashes = []
+      for i in range(len(concepts)):
+        newHashes.append(concepts[i] +','+ str(quadrants[i][0]) +','+ str(quadrants[i][1])) 
+      concepts += (newHashes + commands)
+
+      if training: cache.reinforce(concepts)
+      cache.propogate(concepts)
+      pred, score = cache.getHighest(['a','z'])
+      print('prediction:'+pred, ' confidence:'+str(score))
+      if running:
+        keyboard.press_and_release(pred)
       cache.saveCache()
       ##############
       vis_util.visualize_boxes_and_labels_on_image_array(
@@ -224,16 +224,28 @@ with detection_graph.as_default():
       if res == ord('q'):
         cv2.destroyAllWindows()
         break
-      else:
-        olddir = direction
-        if res == ord('w'):
-            direction = 'forward'
-        elif res == ord('d'):
-            direction = 'right'
-        elif res == ord('a'):
-            direction = 'left'
-        elif res == ord('s'):
-            direction = None
-        if olddir != direction:
-            print('now ', direction,' from ',olddir)
+        # elif res == ord('a'):
 
+        #     # keyboard.press('a')
+        #     commands.append( 'square' )
+        #     print('square class')
+        # elif res == ord('s'):
+        #     # keyboard.press('s')
+        #     commands.append( 'circle' )
+        #     print('circle class')
+      commands = []
+      if lastKey:
+          if lastKey == 'a':
+              commands = ['a']
+          elif lastKey == 'z':
+              commands = ['z']
+          elif lastKey == 'r':
+              training = not training
+              print('training?'+str(training))
+          elif lastKey == 't':
+            running = not running 
+            print('running?'+str(running))
+          lastKey = None
+          
+
+keyboard.unhook_all()
