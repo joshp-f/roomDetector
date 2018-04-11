@@ -27,10 +27,13 @@ class memoryCache:
           normalized = dict([(k, math.pow(v/total,5)) for (k,v) in items.items()]) # gives very weak impact to mixed prob sights
           for k in normalized: self.state[k] += normalized[k]
 
-    def reinforce(self, features):
+    def reinforce(self, features,label=None):
         for f1 in features:
-            for f2 in features:
-                self.d[f1][f2] += 1.0 
+            if label:
+                self.d[f1][label] += 1.0
+            else:
+                for f2 in features:
+                    self.d[f1][f2] += 1.0 
     def getHighest(self, items): #pulls the highest activation from items in the last propagation
         activations = [(name,self.state[name]) for name in items]
         total = max(0.0000000000001,sum([v for (k,v) in activations]))

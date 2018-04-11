@@ -19,7 +19,7 @@ def on_press(key):
     global lastKey
     lastKey = key.name
 keyboard.hook(on_press)
-cap = cv2.VideoCapture(0)
+#cap = cv2.VideoCapture(0)
 
 from color_extractor import ImageToColor
 
@@ -136,20 +136,27 @@ opers = detection_graph.get_operations()
 # oldFeatures = None
 # nettotal = 0.0
 cache = memoryCache()
-commands = []
+commands = ['']
+validIndex = 0
+validKeys = ['stairs','tv bedroom','bathrom','book bedroom','outside']
 training = False
 running = False
+prevKey = None
 print('running predictor')
 with detection_graph.as_default():
   with tf.Session(graph=detection_graph) as sess:
     while True:
     #   ret, image_np = cap.read()
-    #   image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
       image_np = np.array(ImageGrab.grab())
-
+      image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+      hsplit = np.split(image_np, 2)
+      vsplit = np.split(np.array(hsplit), 2, axis=2)
+      segments = np.concatenate(vsplit,axis=0)
+      resized = cv2.resize(image_np, (0,0), fx=0.5, fy=0.5)
+      segments = np.concatenate([segments, np.expand_dims(resized,axis=0)],axis=0) # add main image to process
       # print(detection_graph.get_operations())
       # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-      image_np_expanded = np.expand_dims(image_np, axis=0)
+    #   image_np_expanded = np.expand_dims(image_np, axis=0)
       image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
       # Each box represents a part of the image where a particular object was detected.
       boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
@@ -161,64 +168,74 @@ with detection_graph.as_default():
       # Actual detection.
       (boxes, scores, classes, num_detections) = sess.run(
           [boxes, scores, classes, num_detections],
-          feed_dict={image_tensor: image_np_expanded})
-    
-      tolerance = np.partition(scores.flatten(), -8)[-8]
+          feed_dict={image_tensor: segments})
+      tolerance = np.partition(scores, -7,axis=1)[:,-7]
       # print(boxes)
       # Visualization of the results of a detection.
       # insert into memory correlation of vision to room
-
-      indexes = (scores > tolerance) # boolean matrix of if features are confidently enough observed
-      features = classes[indexes] # high confidence featurees
-      goodBoxes = boxes[indexes]
+      boxes[0:4] = boxes[0:4]/2
+      boxes[1,:,(0,2)] += 0.5
+      boxes[2,:,(1,3)] += 0.5 # repositions quarters
+      boxes[3,:,:] += 0.5 # repositions quarters
+      indexes = scores > np.tile(np.array([tolerance]).transpose(), (1, 100)) # boolean matrix of if features are confidently enough observed
+      features = classes[indexes].flatten() # high confidence featurees
+      goodBoxes = boxes[indexes].reshape(-1,4)
+      goodScores = scores[indexes].flatten()
       centres = (goodBoxes[:,(0,1)]+goodBoxes[:,(2,3)])/2
-      nscores = scores[0]
-      nboxes = boxes[0]
     
       #get color features
-      colors = np.empty([nboxes.shape[0]],dtype=object)
-      for i in range(len(nscores)):
-          if nscores[i] >= tolerance:
-              if i < 0:
-                topbox = nboxes[i]
-                sh = image_np.shape
-                x1 = int(topbox[0]*sh[0])
-                y1 = int(topbox[1]*sh[1])
-                x2 = int(topbox[2]*sh[0])
-                y2 = int(topbox[3]*sh[1])
-                img2 = image_np[x1:x2,y1:y2]
-                colors[i] = img_to_color.get(img2)[0]
-              else:
-                colors[i] = '' 
+    #   colors = np.empty([nboxes.shape[0]],dtype=object)
+    #   for i in range(len(nscores)):
+        #   if nscores[i] >= tolerance:
+        #       if i < 0:
+        #         topbox = nboxes[i]
+        #         # sh = image_np.shape
+        #         # x1 = int(topbox[0]*sh[0])
+        #         # y1 = int(topbox[1]*sh[1])
+        #         # x2 = int(topbox[2]*sh[0])
+        #         # y2 = int(topbox[3]*sh[1])
+        #         # img2 = image_np[x1:x2,y1:y2]
+        #         # colors[i] = img_to_color.get(img2)[0]
+        #       else:
+        #         colors[i] = '' 
       #get shape feature
       concepts = list(map(str, list(features)))
-      quadrants = (goodBoxes*3).astype(int)
       newHashes = []
-      for i in range(len(concepts)):
-        newHashes.append(concepts[i] +','+ str(quadrants[i][0]) +','+ str(quadrants[i][1])) 
+      for m in [2,4,8,16,32]:
+        quadrants = (goodBoxes*m).astype(int)
+        for i in range(len(concepts)):
+            newHashes.append(concepts[i] +',m:'+str(m)+',x:'+ str(quadrants[i][0]) +',y:'+ str(quadrants[i][1])) 
+            newHashes.append(concepts[i] +',m:'+str(m)+',x:'+ str(quadrants[i][0]) )
+            newHashes.append(concepts[i] +',m:'+str(m)+',y:'+ str(quadrants[i][1]) )
+            for j in range(len(concepts)):
+                 newHashes.append(concepts[i] +','+concepts[j]+',m:'+str(m)+',x:'+ str(quadrants[i][0]-quadrants[j][0]) +',y:'+ str(quadrants[i][1]-quadrants[j][1])) 
       concepts += (newHashes + commands)
 
-      if training: cache.reinforce(concepts)
+      if training: cache.reinforce(concepts,label=commands[0])
       cache.propogate(concepts)
-      pred, score = cache.getHighest(['a','z'])
+      pred, score = cache.getHighest(validKeys)
       print('prediction:'+pred, ' confidence:'+str(score))
-      if running:
-        keyboard.press_and_release(pred)
-      cache.saveCache()
+    #   if running:
+    #     if pred != 'stationary':
+    #       keyboard.press_and_release(pred)
+    #       prevKey = pred
+        # else:
+        #   keyboard.release(prevKey)
+        #   prevKey = None
+    #   cache.saveCache()
       ##############
       vis_util.visualize_boxes_and_labels_on_image_array(
           image_np,
-          np.squeeze(boxes),
-          np.squeeze(classes).astype(np.int32),
-          np.squeeze(scores),
+          np.squeeze(goodBoxes),
+          np.squeeze(features).astype(np.int32),
+          goodScores,
           category_index,
           use_normalized_coordinates=True,
-          min_score_thresh=tolerance,
+          min_score_thresh=0.0,
           line_thickness=8,
-          colors = colors
           )
 
-      image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+    #   image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
       cv2.imshow('object detection', cv2.resize(image_np, (800,600)))
       res = cv2.waitKey(25) & 0xFF
       if res == ord('q'):
@@ -233,19 +250,32 @@ with detection_graph.as_default():
         #     # keyboard.press('s')
         #     commands.append( 'circle' )
         #     print('circle class')
-      commands = []
+    #   commands = []
       if lastKey:
+        #   if lastKey in validKeys:
+        #       commands = [lastKey]
           if lastKey == 'a':
-              commands = ['a']
-          elif lastKey == 'z':
-              commands = ['z']
+              validIndex -= ( validIndex - 1) % len(validKeys)
+              print(validKeys[validIndex])
+              commands = [validKeys[validIndex]]
+              lastKey = None
+          elif lastKey == 's':
+              validIndex =  ( validIndex + 1) % len(validKeys)
+              print(validKeys[validIndex])
+              commands = [validKeys[validIndex]]
+              lastKey = None
+          elif lastKey == 'x':
+              commands = ['']
+              lastKey = None
+
           elif lastKey == 'r':
               training = not training
               print('training?'+str(training))
+              lastKey = None
           elif lastKey == 't':
-            running = not running 
+            running = not running
+            lastKey = None 
             print('running?'+str(running))
-          lastKey = None
           
 
 keyboard.unhook_all()
