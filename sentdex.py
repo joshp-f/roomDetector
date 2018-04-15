@@ -1,7 +1,7 @@
 import numpy as np
 import six.moves.urllib as urllib
 import sys, os, math
-from memoryCache import memoryCache
+from .memoryCache import memoryCache
 import tarfile
 import tensorflow as tf
 import zipfile
@@ -21,10 +21,11 @@ def on_press(key):
 keyboard.hook(on_press)
 #cap = cv2.VideoCapture(0)
 
-from color_extractor import ImageToColor
+# from color_extractor import ImageToColor
 
-npz = np.load('color_names.npz')
-img_to_color = ImageToColor(npz['samples'], npz['labels'])
+# npz = np.load('color_names.npz')
+# img_to_color = ImageToColor(npz['samples'], npz['labels'])
+
 # This is needed since the notebook is stored in the object_detection folder.
 sys.path.append("..")
 
@@ -138,7 +139,7 @@ opers = detection_graph.get_operations()
 cache = memoryCache()
 commands = ['']
 validIndex = 0
-validKeys = ['stairs','tv bedroom','bathrom','book bedroom','outside']
+validKeys = ['living room','kitchen','dining room','veranhdah'  ,'stairs']
 training = False
 running = False
 prevKey = None
@@ -169,7 +170,7 @@ with detection_graph.as_default():
       (boxes, scores, classes, num_detections) = sess.run(
           [boxes, scores, classes, num_detections],
           feed_dict={image_tensor: segments})
-      tolerance = np.partition(scores, -7,axis=1)[:,-7]
+      tolerance = np.partition(scores, -5,axis=1)[:,-5]
       # print(boxes)
       # Visualization of the results of a detection.
       # insert into memory correlation of vision to room
@@ -201,7 +202,7 @@ with detection_graph.as_default():
       #get shape feature
       concepts = list(map(str, list(features)))
       newHashes = []
-      for m in [2,4,8,16,32]:
+      for m in [1,2,4,8,16,32]:
         quadrants = (goodBoxes*m).astype(int)
         for i in range(len(concepts)):
             newHashes.append(concepts[i] +',m:'+str(m)+',x:'+ str(quadrants[i][0]) +',y:'+ str(quadrants[i][1])) 
@@ -209,7 +210,7 @@ with detection_graph.as_default():
             newHashes.append(concepts[i] +',m:'+str(m)+',y:'+ str(quadrants[i][1]) )
             for j in range(len(concepts)):
                  newHashes.append(concepts[i] +','+concepts[j]+',m:'+str(m)+',x:'+ str(quadrants[i][0]-quadrants[j][0]) +',y:'+ str(quadrants[i][1]-quadrants[j][1])) 
-      concepts += (newHashes + commands)
+      concepts = (newHashes + commands)
 
       if training: cache.reinforce(concepts,label=commands[0])
       cache.propogate(concepts)
@@ -222,8 +223,9 @@ with detection_graph.as_default():
         # else:
         #   keyboard.release(prevKey)
         #   prevKey = None
-    #   cache.saveCache()
+      cache.saveCache()
       ##############
+
       vis_util.visualize_boxes_and_labels_on_image_array(
           image_np,
           np.squeeze(goodBoxes),
@@ -233,8 +235,17 @@ with detection_graph.as_default():
           use_normalized_coordinates=True,
           min_score_thresh=0.0,
           line_thickness=8,
+          max_boxes_to_draw=5*10
           )
-
+      cv2.putText(
+          image_np,
+          pred, 
+          (10,100), 
+          cv2.FONT_HERSHEY_SIMPLEX, 
+          3,
+          (0,0,0),
+          4
+      )
     #   image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
       cv2.imshow('object detection', cv2.resize(image_np, (800,600)))
       res = cv2.waitKey(25) & 0xFF
